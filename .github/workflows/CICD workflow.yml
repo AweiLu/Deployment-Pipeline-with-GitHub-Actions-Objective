@@ -84,9 +84,54 @@ jobs:
           path: build-package.zip
           retention-days: 30
 
+  # Deploy Dev - 部署到開發環境
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Deploy to Development Environment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          
+          # 使用 dev-vX.Y 格式的標籤
+          TAG="dev-v1.0"
+          NOTE="Development build for testing"
+          
+          echo "🚀 部署到 Development 環境..."
+          echo "標籤: ${TAG}"
+          echo "說明: ${NOTE}"
+          
+          # 如果 release 已存在，先刪除以避免衝突
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "📝 刪除現有的 dev 版本 ${TAG}"
+            gh release delete "${TAG}" --yes
+          fi
+          
+          # 創建 dev release
+          gh release create "${TAG}" build-package.zip \
+            --title "Development Release - ${TAG}" \
+            --notes "${NOTE}" \
+            --prerelease
+          
+          echo "✅ 成功部署到 Development 環境！"
+
   # Deploy Staging - 部署到 staging 環境
   deploy-staging:
-    needs: build
+    needs: deploy-dev
     runs-on: ubuntu-latest
     environment: staging
     steps:
