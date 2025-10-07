@@ -87,6 +87,15 @@ jobs:
           fi
 
           echo "Creating GitHub Release: ${TAG}"
-          # --title 用 TAG，notes 用 NOTE，附上 zip 檔
+          
+          # 檢查 release 是否已存在，如果存在就刪除
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists. Deleting it first..."
+            gh release delete "${TAG}" --yes
+            echo "Deleted existing release ${TAG}"
+          fi
+          
+          # 創建新的 release
           gh release create "${TAG}" build.zip --title "${TAG}" --notes "${NOTE}"
+          echo "Successfully created release ${TAG}"
  
