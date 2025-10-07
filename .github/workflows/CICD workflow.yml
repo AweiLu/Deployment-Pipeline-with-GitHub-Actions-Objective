@@ -1,0 +1,121 @@
+name: CI/CD Deployment Pipeline
+
+on:
+  workflow_dispatch:  # 手動觸發，符合作業要求（E 級）
+
+permissions:
+  contents: write     # 建立/更新 Release 需要
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 可選：若是 Node.js 專案，安裝 Node 18；不是 Node 也不影響打包
+      - name: Setup Node (optional)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # 自動偵測 Node 或 Python 的建置流程，沒有就略過
+      - name: Build
+        run: |
+          set -e
+          if [ -f package.json ]; then
+            echo "Detected Node project"
+            npm ci || npm install
+            npm run build || echo "No 'build' script, skipping build"
+          elif [ -f setup.py ] || [ -f pyproject.toml ]; then
+            echo "Detected Python project"
+            python -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt || true
+            fi
+            python setup.py install || true
+          else
+            echo "No Node or Python build files found. Zipping repository as-is."
+          fi
+
+          # 打包成 artifact（排除 .git 和 workflow 目錄）
+          zip -r build.zip . -x ".git/*" ".github/*"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout (provide git context)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release Staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:  ${{ vars.BUILD_TAG }}         # 例：staging-v1.0.0
+          NOTE: ${{ vars.RELEASE_NOTE }}      # 例：Testing pre-production release
+        run: |
+          set -e
+          if [ -z "${TAG}" ]; then
+            echo "ERROR: staging vars.BUILD_TAG is missing."
+            exit 1
+          fi
+          if [ -z "${NOTE}" ]; then
+            NOTE="Testing pre-production release"
+          fi
+
+          echo "Creating Staging Release: ${TAG}"
+          # 若 Release 已存在，先刪除以避免衝突（idempotent）
+          if gh release view "${TAG}" &>/dev/null; then
+            gh release delete "${TAG}" --yes
+          fi
+          gh release create "${TAG}" build.zip --title "${TAG}" --notes "${NOTE}"
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production   # 會被環境保護規則擋住，需要人工核准
+    steps:
+      - name: Checkout (provide git context)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release Production
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:  ${{ vars.BUILD_TAG }}         # 例：prod-v1.0.0
+          NOTE: ${{ vars.RELEASE_NOTE }}      # 例：Production release
+        run: |
+          set -e
+          if [ -z "${TAG}" ]; then
+            echo "ERROR: production vars.BUILD_TAG is missing."
+            exit 1
+          fi
+          if [ -z "${NOTE}" ]; then
+            NOTE="Production release"
+          fi
+
+          echo "Creating Production Release: ${TAG}"
+          if gh release view "${TAG}" &>/dev/null; then
+            gh release delete "${TAG}" --yes
+          fi
+          gh release create "${TAG}" build.zip --title "${TAG}" --notes "${NOTE}"
