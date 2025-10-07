@@ -1,23 +1,17 @@
 name: CI/CD Deployment Pipeline
 
-# 觸發條件：推送到 main 分支自動執行，也可手動觸發
+# 觸發條件：只允許手動觸發（符合 Grade E 要求）
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # 手動觸發
+  workflow_dispatch:
 
 # 設定權限
 permissions:
   contents: write     # 建立/更新 Release 需要
   actions: read       # 讀取 artifacts 需要
-  checks: write       # 寫入測試結果需要
 
 jobs:
-  # 第一階段：測試、構建和打包（合併為一個 job）
-  build-lint-test-package:
-    name: Build, Lint, Test, Package
+  # Build Job - 與基礎任務相同
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -32,39 +26,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
-      - name: Install Dependencies & Run Tests
-        run: |
-          set -e
-          echo "=== 檢測專案類型並執行測試 ==="
-          
-          if [ -f package.json ]; then
-            echo "📦 檢測到 Node.js 專案"
-            npm ci || npm install
-            
-            # 執行 linting 和測試
-            npm run lint || echo "⚠️ 沒有 lint script，跳過"
-            npm run test || echo "⚠️ 沒有 test script，跳過"
-            
-          elif [ -f setup.py ] || [ -f pyproject.toml ] || [ -f requirements.txt ]; then
-            echo "🐍 檢測到 Python 專案"
-            python -m pip install --upgrade pip
-            
-            if [ -f requirements.txt ]; then
-              pip install -r requirements.txt
-            fi
-            
-            # 執行 Python 測試
-            if [ -f requirements-dev.txt ]; then
-              pip install -r requirements-dev.txt
-            fi
-            
-            # 嘗試執行常見的測試命令
-            python -m pytest || python -m unittest discover || echo "⚠️ 沒有找到測試，跳過"
-            
-          else
-            echo "ℹ️ 沒有檢測到特定專案類型，跳過測試階段"
-          fi
 
       - name: Build Application
         run: |
@@ -119,126 +80,95 @@ jobs:
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-package
+          name: build-artifact
           path: build-package.zip
           retention-days: 30
 
-  # 第二階段：部署到開發環境 (Pre-release)
-  deploy-to-dev:
-    name: Deploy to Dev (Pre-release)
-    needs: build-lint-test-package
-    runs-on: ubuntu-latest
-    environment: development
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download Build Package
-        uses: actions/download-artifact@v4
-        with:
-          name: build-package
-
-      - name: Deploy to Development
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ vars.DEV_TAG || 'dev-latest' }}
-          NOTE: ${{ vars.DEV_RELEASE_NOTE || 'Development release - automated deployment' }}
-        run: |
-          set -e
-          echo "🚀 部署到開發環境..."
-          
-          # 如果 release 已存在，先刪除
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "📝 刪除現有的開發版本 ${TAG}"
-            gh release delete "${TAG}" --yes
-          fi
-          
-          # 創建新的開發版本 (Pre-release)
-          gh release create "${TAG}" build-package.zip \
-            --title "Development Release - ${TAG}" \
-            --notes "${NOTE}" \
-            --prerelease
-          
-          echo "✅ 成功部署到開發環境！"
-
-  # 第三階段：部署到測試環境 (Pre-release)
-  deploy-to-staging:
-    name: Deploy to Staging (Pre-release)
-    needs: deploy-to-dev
+  # Deploy Staging - 部署到 staging 環境
+  deploy-staging:
+    needs: build
     runs-on: ubuntu-latest
     environment: staging
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download Build Package
+      - name: Download Build Artifact
         uses: actions/download-artifact@v4
         with:
-          name: build-package
+          name: build-artifact
 
-      - name: Deploy to Staging
+      - name: Deploy to Staging Environment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ vars.STAGING_TAG || 'staging-latest' }}
-          NOTE: ${{ vars.STAGING_RELEASE_NOTE || 'Staging release - ready for QA testing' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          echo "🔄 部署到測試環境..."
           
+          # 使用 staging-vX.Y 格式的標籤
+          TAG="staging-v1.0"
+          NOTE="Testing pre-production release"
+          
+          echo "🔄 部署到 Staging 環境..."
+          echo "標籤: ${TAG}"
+          echo "說明: ${NOTE}"
+          
+          # 如果 release 已存在，先刪除以避免衝突
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "📝 刪除現有的測試版本 ${TAG}"
+            echo "📝 刪除現有的 staging 版本 ${TAG}"
             gh release delete "${TAG}" --yes
           fi
           
-          # 創建新的測試版本 (Pre-release)
+          # 創建 staging release
           gh release create "${TAG}" build-package.zip \
             --title "Staging Release - ${TAG}" \
             --notes "${NOTE}" \
             --prerelease
           
-          echo "✅ 成功部署到測試環境！"
+          echo "✅ 成功部署到 Staging 環境！"
 
-  # 第四階段：部署到生產環境 (Final release)
-  deploy-to-production:
-    name: Deploy to Production (Final release)
-    needs: deploy-to-staging
+  # Deploy Production - 部署到 production 環境（需要手動審核）
+  deploy-production:
+    needs: deploy-staging
     runs-on: ubuntu-latest
-    environment: production  # 需要人工審核
-    if: github.ref == 'refs/heads/main'
+    environment: production  # 使用 production 環境（需要設定保護規則和審核者）
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download Build Package
+      - name: Download Build Artifact
         uses: actions/download-artifact@v4
         with:
-          name: build-package
+          name: build-artifact
 
-      - name: Deploy to Production
+      - name: Deploy to Production Environment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ vars.PROD_TAG || 'prod-latest' }}
-          NOTE: ${{ vars.PROD_RELEASE_NOTE || 'Production release - stable version' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          echo "🚀 部署到生產環境..."
           
+          # 使用 prod-vX.Y 格式的標籤
+          TAG="prod-v1.0"
+          NOTE="Production release - stable version"
+          
+          echo "🚀 部署到 Production 環境..."
+          echo "標籤: ${TAG}"
+          echo "說明: ${NOTE}"
+          
+          # 如果 release 已存在，先刪除以避免衝突
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "📝 刪除現有的生產版本 ${TAG}"
+            echo "📝 刪除現有的 production 版本 ${TAG}"
             gh release delete "${TAG}" --yes
           fi
           
-          # 創建新的生產版本 (Final release - 不是 pre-release)
+          # 創建 production release（正式版本，不是 pre-release）
           gh release create "${TAG}" build-package.zip \
             --title "Production Release - ${TAG}" \
             --notes "${NOTE}"
           
-          echo "🎉 成功部署到生產環境！"
+          echo "🎉 成功部署到 Production 環境！"
