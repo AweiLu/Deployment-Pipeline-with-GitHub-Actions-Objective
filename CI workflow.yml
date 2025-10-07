@@ -1,0 +1,88 @@
+
+name: CI Dev Deployment
+
+# 觸發條件：推到 main 就跑；也可手動觸發
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# 建立 Release 需要 write 權限
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 若是 Node.js 專案，安裝 Node 18（不是 Node 專案也不會影響後續 zip 打包）
+      - name: Setup Node (optional)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # 安裝/建置（兼容 Node 或 Python；如果沒有相應檔案會跳過）
+      - name: Build
+        run: |
+          set -e
+          if [ -f package.json ]; then
+            echo "Detected Node project"
+            npm ci || npm install
+            npm run build || echo "No 'build' script, skipping build"
+          elif [ -f setup.py ] || [ -f pyproject.toml ]; then
+            echo "Detected Python project"
+            python -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt || true
+            fi
+            # 視你的專案需要調整以下指令
+            python setup.py install || true
+          else
+            echo "No Node or Python build files found. Zipping repository as-is."
+          fi
+
+          # 打包成 artifact（排除 .git 和 workflow 目錄）
+          zip -r build.zip . -x ".git/*" ".github/*"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release Dev Build
+        # gh 需要 Token；這裡同時提供 GH_TOKEN 與 GITHUB_TOKEN（兩者皆可）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ vars.BUILD_TAG }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          set -e
+
+          # 檢查環境變數是否存在
+          if [ -z "${TAG}" ]; then
+            echo "ERROR: Environment variable 'BUILD_TAG' (vars.BUILD_TAG) is not set in 'dev' environment."
+            exit 1
+          fi
+          if [ -z "${NOTE}" ]; then
+            echo "WARNING: 'RELEASE_NOTE' (vars.RELEASE_NOTE) is empty. Using default note."
+            NOTE="Development build"
+          fi
+
+          echo "Creating GitHub Release: ${TAG}"
+          # --title 用 TAG，notes 用 NOTE，附上 zip 檔
+          gh release create "${TAG}" build.zip --title "${TAG}" --notes "${NOTE}"
