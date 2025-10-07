@@ -15,9 +15,9 @@ permissions:
   checks: write       # 寫入測試結果需要
 
 jobs:
-  # 第一階段：測試和代碼品質檢查
-  test:
-    name: Test & Code Quality
+  # 第一階段：測試、構建和打包（合併為一個 job）
+  build-lint-test-package:
+    name: Build, Lint, Test, Package
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -65,25 +65,6 @@ jobs:
           else
             echo "ℹ️ 沒有檢測到特定專案類型，跳過測試階段"
           fi
-
-  # 第二階段：構建和打包
-  build:
-    name: Build & Package
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
 
       - name: Build Application
         run: |
@@ -142,13 +123,13 @@ jobs:
           path: build-package.zip
           retention-days: 30
 
-  # 第三階段：部署到開發環境
-  deploy-dev:
-    name: Deploy to Development
-    needs: build
+  # 第二階段：部署到開發環境 (Pre-release)
+  deploy-to-dev:
+    name: Deploy to Dev (Pre-release)
+    needs: build-lint-test-package
     runs-on: ubuntu-latest
     environment: development
-    if: github.ref == 'refs/heads/main'  # 只在 main 分支執行
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -175,7 +156,7 @@ jobs:
             gh release delete "${TAG}" --yes
           fi
           
-          # 創建新的開發版本
+          # 創建新的開發版本 (Pre-release)
           gh release create "${TAG}" build-package.zip \
             --title "Development Release - ${TAG}" \
             --notes "${NOTE}" \
@@ -183,10 +164,10 @@ jobs:
           
           echo "✅ 成功部署到開發環境！"
 
-  # 第四階段：部署到測試環境
-  deploy-staging:
-    name: Deploy to Staging
-    needs: deploy-dev
+  # 第三階段：部署到測試環境 (Pre-release)
+  deploy-to-staging:
+    name: Deploy to Staging (Pre-release)
+    needs: deploy-to-dev
     runs-on: ubuntu-latest
     environment: staging
     if: github.ref == 'refs/heads/main'
@@ -215,6 +196,7 @@ jobs:
             gh release delete "${TAG}" --yes
           fi
           
+          # 創建新的測試版本 (Pre-release)
           gh release create "${TAG}" build-package.zip \
             --title "Staging Release - ${TAG}" \
             --notes "${NOTE}" \
@@ -222,12 +204,12 @@ jobs:
           
           echo "✅ 成功部署到測試環境！"
 
-  # 第五階段：部署到生產環境（需要人工審核）
-  deploy-production:
-    name: Deploy to Production
-    needs: deploy-staging
+  # 第四階段：部署到生產環境 (Final release)
+  deploy-to-production:
+    name: Deploy to Production (Final release)
+    needs: deploy-to-staging
     runs-on: ubuntu-latest
-    environment: production  # 設定環境保護規則，需要人工審核
+    environment: production  # 需要人工審核
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Code
@@ -254,29 +236,9 @@ jobs:
             gh release delete "${TAG}" --yes
           fi
           
+          # 創建新的生產版本 (Final release - 不是 pre-release)
           gh release create "${TAG}" build-package.zip \
             --title "Production Release - ${TAG}" \
             --notes "${NOTE}"
           
           echo "🎉 成功部署到生產環境！"
-
-  # 第六階段：部署後通知
-  notify:
-    name: Deployment Notification
-    needs: [deploy-dev, deploy-staging, deploy-production]
-    runs-on: ubuntu-latest
-    if: always() && github.ref == 'refs/heads/main'
-    steps:
-      - name: Deployment Summary
-        run: |
-          echo "📊 部署摘要報告"
-          echo "=================="
-          echo "🔗 Commit: ${GITHUB_SHA:0:7}"
-          echo "🌟 分支: ${GITHUB_REF_NAME}"
-          echo "👤 觸發者: ${GITHUB_ACTOR}"
-          echo "⏰ 時間: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          echo ""
-          echo "📋 部署狀態:"
-          echo "- 開發環境: ${{ needs.deploy-dev.result }}"
-          echo "- 測試環境: ${{ needs.deploy-staging.result }}"
-          echo "- 生產環境: ${{ needs.deploy-production.result }}"
