@@ -139,6 +139,11 @@ jobs:
     if: ${{ needs.test.result == 'success' }}  # 只在測試成功時發布
     environment: dev
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整克隆存儲庫，提供 git 上下文
+      
       - uses: actions/download-artifact@v4
         with:
           name: build-artifact
