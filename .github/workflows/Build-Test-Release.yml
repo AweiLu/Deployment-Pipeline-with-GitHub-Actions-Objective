@@ -157,8 +157,14 @@ jobs:
           TAG="dev-${GITHUB_RUN_ID}"
           echo "創建開發版本: ${TAG}"
           
-          # 使用 GitHub CLI 創建發布
-          gh release create "${TAG}" dist/* \
+          # 打包 dist 目錄的內容，而不是直接上傳目錄
+          echo "正在打包構建產物..."
+          cd dist
+          zip -r ../release.zip .
+          cd ..
+          
+          # 使用 GitHub CLI 創建發布，上傳 zip 檔
+          gh release create "${TAG}" release.zip \
             --title "Development Release - ${TAG}" \
             --notes "自動發布 - 所有測試已通過" \
             --prerelease
