@@ -92,29 +92,15 @@ jobs:
         run: |
           echo "🧪 執行自動化測試..."
           
-          # 檢查是否為 Node.js 專案
-          if [ -f "package.json" ]; then
-            if grep -q "\"test\"" package.json; then
-              npm test || (echo "❌ 測試失敗" && exit 1)
-            else
-              # 模擬測試 (如果沒有 test 腳本)
-              echo "📝 執行模擬測試"
-              echo "單元測試: ✅ 通過"
-              echo "功能測試: ✅ 通過"
-              echo "整合測試: ✅ 通過"
-              echo "所有測試通過！"
-            fi
-          # 檢查是否為 Python 專案
-          elif [ -f "pytest.ini" ] || [ -d "tests" ]; then
-            python -m pytest || (echo "❌ 測試失敗" && exit 1)
-          else
-            # 模擬測試 (如果沒有實際測試)
-            echo "📝 執行模擬測試"
-            echo "單元測試: ✅ 通過"
-            echo "功能測試: ✅ 通過"
-            echo "整合測試: ✅ 通過"
-            echo "所有測試通過！"
-          fi
+          # 強制測試失敗，模擬測試階段失敗的情境
+          echo "📝 執行模擬測試"
+          echo "單元測試: ✅ 通過"
+          echo "功能測試: ❌ 失敗"
+          echo "整合測試: ✅ 通過"
+          echo "❌ 測試失敗！部分測試未通過。"
+          
+          # 使工作流程失敗，退出碼1
+          exit 1
 
       - name: Generate test report
         if: always()
